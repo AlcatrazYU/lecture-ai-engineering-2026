@@ -5,6 +5,8 @@
 """
 
 import json
+import random
+from datetime import datetime
 from functools import cache
 from pathlib import Path
 
@@ -77,3 +79,49 @@ def get_lecture_summary(lecture: int) -> str:
         available = sorted(p.stem for p in (DATA_DIR / "lectures").glob("*.md"))
         return f"第{lecture}回の要点はまだありません。用意されている回: {', '.join(available)}"
     return path.read_text(encoding="utf-8")
+
+def make_quiz(lecture: int) -> str:
+    """指定した回の用語から1つを選び、確認問題と答えを返す。
+
+    「第2回の確認問題を出して」のように、
+    復習用の問題を求められたときに使う。
+    """
+    terms = [
+        term for term in load_glossary()
+        if term["lecture"] == lecture
+    ]
+
+    if not terms:
+        return f"第{lecture}回には用語がありません。"
+
+    term = random.choice(terms)
+
+    return json.dumps(
+        {
+            "question": f"「{term['term']}」の意味は？",
+            "answer": term["definition"],
+        },
+        ensure_ascii=False,
+    )
+
+def save_learning_log(lecture: int, content: str) -> str:
+    """利用者の確認後に、指定した回の学習記録を保存するときに使う。
+
+    学習記録は講義回と保存日時を付けた別ファイルとして保存する。
+    「第3回の学習記録を保存して」のように、
+    学習内容をファイルに残したいときに使う。
+    保存前には必ず利用者の承認を得る。
+    """
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    directory = Path("learning_log")
+    directory.mkdir(parents=True, exist_ok=True)
+
+    path = directory / f"lec{lecture:02d}-{timestamp}.md"
+
+    counter = 2
+    while path.exists():
+        path = directory / f"lec{lecture:02d}-{timestamp}-{counter}.md"
+        counter += 1
+
+    path.write_text(content, encoding="utf-8")
+    return f"学習記録を {path} に保存しました。"
