@@ -16,7 +16,7 @@ import inspect
 import json
 from pathlib import Path
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, DeferredToolRequests
 from pydantic_ai.exceptions import ModelHTTPError
 from fastmcp import Client
 from pydantic_ai.mcp import MCPToolset, StdioTransport
@@ -38,11 +38,19 @@ INSTRUCTIONS = """\
 """
 
 # モデルは実行時に渡す（テストではAPIを呼ばない TestModel に差し替えるため）
-agent = Agent(instructions=INSTRUCTIONS)
+agent = Agent(
+    instructions=INSTRUCTIONS,
+    output_type=[str, DeferredToolRequests],
+)
 agent.tool_plain(tools.search_glossary)
 agent.tool_plain(tools.get_lecture_summary)
 
 # TODO(第3回 演習): tools.py に make_quiz を作り、ここで登録しよう
+agent.tool_plain(tools.make_quiz)
+agent.tool_plain(
+    tools.save_learning_log,
+    requires_approval=True,
+)
 
 # 第5回: 使う MCP サーバーの設定ファイル。Claude Desktop や Cursor と同じ "mcpServers" 形式
 MCP_CONFIG = Path(__file__).resolve().parent / "mcp_servers.json"
@@ -128,7 +136,34 @@ def main() -> None:
     if args.mcp:
         print("[tools] MCP サーバー（app/mcp_servers.json）")
     try:
-        result = target.run_sync(args.question, model=build_model())
+        result = target.run_sync(
+            args.question,
+            model=build_model(),
+         )
+
+        while isinstance(result.output, DeferredToolRequests):
+            approvals = {}
+
+            for approval in result.output.approvals:
+                print("\n--- ツール実行の確認 ---")
+                print(f"ツール: {approval.tool_name}")
+                print(f"引数: {approval.args}")
+
+                answer = input("このツールを実行しますか？ [y/N]: ")
+                approvals[approval.tool_call_id] = (
+                    answer.strip().lower() in {"y", "yes"}
+                 )
+
+            deferred_results = result.output.build_results(
+                approvals=approvals,
+             )
+
+            result = target.run_sync(
+                model=build_model(),
+                message_history=result.all_messages(),
+                deferred_tool_results=deferred_results,
+             )
+
     except ModelHTTPError as e:
         print(api_error_message(e.status_code, str(e.body)[:200]))
         raise SystemExit(1)
